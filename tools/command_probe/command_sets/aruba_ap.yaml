@@ -1,0 +1,28 @@
+schema_version: 1
+
+platform:
+  vendor: aruba
+  platform: arubaos
+  family: wireless
+
+safety:
+  read_only: true
+  allow_config_mode: false
+  blocked_keywords:
+    - configure
+    - commit
+    - write
+    - copy
+    - reload
+    - reboot
+    - shutdown
+    - clear
+    - debug
+    - "no"
+
+commands:
+  inventory:
+    - command: show version
+
+  poe:
+    - command: show ap power

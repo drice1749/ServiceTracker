@@ -1,0 +1,50 @@
+schema_version: 1.0
+
+platform:
+  vendor: aruba
+  platform: aos-switch
+  family: switch
+
+description: >
+  ArubaOS-Switch (ProCurve-style) read-only command discovery set.
+
+safety:
+  read_only: true
+  allow_config_mode: false
+  blocked_keywords:
+    - config
+    - write
+    - reload
+    - clear
+    - debug
+    - erase
+    - copy
+
+transport:
+  ssh:
+    enable_mode_required: false
+    paging_disable:
+      - no page
+
+commands:
+  inventory:
+    - command: show system
+    - command: show version
+
+  lldp:
+    - command: show lldp info remote-device
+    - command: show lldp info local-device
+
+  interfaces:
+    - command: show interfaces brief
+    - command: show interfaces
+
+  vlans:
+    - command: show vlan
+    - command: show vlan brief
+
+  poe:
+    - command: show power-over-ethernet
+
+  mac_table:
+    - command: show mac-address

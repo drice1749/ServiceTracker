@@ -1,0 +1,57 @@
+# ============================================================
+# Aruba CX Command Probe — DISCOVERY PHASE
+#
+# Platform: Aruba AOS-CX
+# Device Role: Switch
+# Version Tested: ML.10.15.1030
+# Status: MUTABLE (Phase 1 only)
+# ============================================================
+
+schema_version: 1
+
+platform:
+  vendor: aruba
+  platform: aruba_cx
+  family: switch
+
+transport:
+  ssh:
+    paging_disable:
+      - terminal length 1000
+      - terminal width 200
+
+safety:
+  read_only: true
+  allow_config_mode: false
+  blocked_keywords:
+    - configure
+    - copy
+    - write
+    - reload
+    - erase
+    - delete
+    - shutdown
+
+commands:
+
+  inventory:
+    - command: show version
+    - command: show system
+
+  interfaces:
+    - command: show interface brief
+    - command: show interface all
+
+  vlans:
+    - command: show vlan
+    - command: show vlan brief
+
+  lldp:
+    - command: show lldp local-device
+    - command: show lldp neighbors
+
+  mac_table:
+    - command: show mac-address-table
+
+  poe:
+    - command: show poe brief

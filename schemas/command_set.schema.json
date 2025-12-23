@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://network-service-tracker/schemas/command_set.schema.json",
+  "title": "Command Set Schema",
+  "description": "Schema for safe, read-only command discovery sets",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "platform",
+    "safety",
+    "commands"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "enum": [1.0]
+    },
+
+    "platform": {
+      "type": "object",
+      "required": ["vendor", "platform", "family"],
+      "additionalProperties": false,
+      "properties": {
+        "vendor": { "type": "string" },
+        "platform": { "type": "string" },
+        "family": {
+          "type": "string",
+          "enum": ["switch", "firewall", "router", "wireless"]
+        }
+      }
+    },
+
+    "description": {
+      "type": "string"
+    },
+
+    "safety": {
+      "type": "object",
+      "required": [
+        "read_only",
+        "allow_config_mode",
+        "blocked_keywords"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "read_only": { "type": "boolean", "const": true },
+        "allow_config_mode": { "type": "boolean", "const": false },
+        "blocked_keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ssh": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enable_mode_required": { "type": "boolean" },
+            "paging_disable": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "commands": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "inventory": { "$ref": "#/$defs/commandList" },
+        "configuration": { "$ref": "#/$defs/commandList" },
+        "interfaces": { "$ref": "#/$defs/commandList" },
+        "vlans": { "$ref": "#/$defs/commandList" },
+        "lldp": { "$ref": "#/$defs/commandList" },
+        "arp": { "$ref": "#/$defs/commandList" },
+        "mac_table": { "$ref": "#/$defs/commandList" },
+        "poe": { "$ref": "#/$defs/commandList" },
+        "routing": { "$ref": "#/$defs/commandList" },
+        "firmware": { "$ref": "#/$defs/commandList" },
+        "licenses": { "$ref": "#/$defs/commandList" },
+        "logs": { "$ref": "#/$defs/commandList" },
+        "other": { "$ref": "#/$defs/commandList" }
+      }
+    }
+  },
+
+  "$defs": {
+    "commandList": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["command"],
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expect": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "success_patterns": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "failure_patterns": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
