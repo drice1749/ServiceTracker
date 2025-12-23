@@ -18,7 +18,6 @@ import re
 from pathlib import Path
 from datetime import datetime
 
-
 COLLECTOR_NAME = "aruba_controller"
 COLLECTOR_VERSION = "1.1"
 
@@ -108,60 +107,51 @@ def parse_virtual_aps(artifacts):
 
 
 def parse_clients(artifacts):
-    """
-    Parses `show user-table` using header-based column slicing
-    to avoid column drift when optional fields are empty.
-    """
     text = artifacts.get("mac_table_1.txt", "")
     clients = []
 
-    lines = text.splitlines()
-    header = None
-
-    for line in lines:
-        if line.strip().startswith("IP"):
-            header = line
-            break
-
-    if not header:
+    if "Users" not in text:
         return clients
 
-    columns = {
-        "ip": header.find("IP"),
-        "mac": header.find("MAC"),
-        "name": header.find("Name"),
-        "role": header.find("Role"),
-        "age": header.find("Age"),
-        "ap": header.find("AP name"),
-        "essid": header.find("Essid"),
-    }
+    lines = text.splitlines()
 
-    col_positions = sorted(
-        [(k, v) for k, v in columns.items() if v >= 0],
-        key=lambda x: x[1],
-    )
+    header_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith("IP") and "AP name" in line:
+            header_idx = i
+            break
 
-    def slice_field(line, start, end=None):
-        return line[start:end].strip() if end else line[start:].strip()
+    if header_idx is None:
+        return clients
 
-    for line in lines:
+    header = lines[header_idx]
+    col_starts = [m.start() for m in re.finditer(r"\S+", header)]
+
+    def slice_cols(line):
+        fields = []
+        for i, start in enumerate(col_starts):
+            end = col_starts[i + 1] if i + 1 < len(col_starts) else None
+            fields.append(line[start:end].strip())
+        return fields
+
+    for line in lines[header_idx + 2:]:
         if not re.match(r"\d+\.\d+\.\d+\.\d+", line):
             continue
 
-        record = {}
-        for i, (key, start) in enumerate(col_positions):
-            end = col_positions[i + 1][1] if i + 1 < len(col_positions) else None
-            record[key] = slice_field(line, start, end) or None
+        cols = slice_cols(line)
 
-        clients.append({
-            "ip": record.get("ip"),
-            "mac": record.get("mac"),
-            "name": record.get("name"),
-            "role": record.get("role"),
-            "auth_age": record.get("age"),
-            "ap": record.get("ap"),
-            "essid": record.get("essid"),
-        })
+        try:
+            clients.append({
+                "ip": cols[0],
+                "mac": cols[1],
+                "name": cols[2] or None,
+                "role": cols[3],
+                "auth_age": cols[4],
+                "ap": cols[7],
+                "essid": cols[9],
+            })
+        except IndexError:
+            continue
 
     return clients
 
