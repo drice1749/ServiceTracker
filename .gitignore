@@ -1,0 +1,28 @@
+# =========================
+# Runtime-generated data
+# =========================
+
+tools/command_probe/output/
+artifacts/
+
+# =========================
+# Python
+# =========================
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.venv/
+venv/
+.env
+.env.*
+
+# =========================
+# OS / Editor
+# =========================
+
+.DS_Store
+.idea/
+.vscode/
