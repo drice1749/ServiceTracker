@@ -2,12 +2,12 @@
 """
 Command Probe — ArubaOS-Switch (Read-Only, Timing-Safe)
 ------------------------------------------------------
-Fixes Netmiko prompt desync issues by using send_command_timing().
+Fixed version that:
+- Expands VLAN commands into vlan_summary, vlan_<id>, vlan_<id>_detail
+- Prevents duplicate leftover VLAN commands (`vlans_13.txt`, `vlans_14.txt`)
+- Preserves all original behavior outside of that fix
 
-- ArubaOS / ProCurve compatible
-- No expect_string usage
-- Deterministic output capture
-- Read-only
+This is a full replacement file.
 """
 
 import json
@@ -15,12 +15,14 @@ import uuid
 import yaml
 import hashlib
 import time
+import re
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from jsonschema import Draft202012Validator
 from netmiko import ConnectHandler
+from jinja2 import Template
 
 
 # -------------------------
@@ -31,7 +33,7 @@ SCHEMA_PATH = Path("schemas/command_set.schema.json")
 OUTPUT_ROOT = Path("tools/command_probe/output")
 
 TOOL_NAME = "command_probe"
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.5.0"
 
 
 # -------------------------
@@ -74,6 +76,28 @@ def enforce_blocked_keywords(command: str, blocked: list[str]) -> None:
             )
 
 
+def render_command(template_str: str, context: Dict[str, Any]) -> str:
+    """Render Jinja-style {{ variables }} in command templates."""
+    return Template(template_str).render(**context)
+
+
+def extract_vlan_ids(output_bytes: bytes) -> List[int]:
+    """
+    Extract VLAN IDs from 'show vlan' output.
+    Matches:
+      '  1   DEFAULT_VLAN ...'
+      ' 200  DLR_SERVER_VLAN ...'
+    """
+    text = output_bytes.decode(errors="ignore")
+    ids: List[int] = []
+    for match in re.finditer(r"^\s*(\d+)\s+", text, flags=re.MULTILINE):
+        try:
+            ids.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return ids
+
+
 # -------------------------
 # SSH Execution (Timing-Safe)
 # -------------------------
@@ -95,9 +119,7 @@ def disable_paging(conn, commands: list[str]):
 
 
 def flush_channel(conn):
-    """
-    Drain any residual output before issuing the next command.
-    """
+    """Drain any residual output before issuing the next command."""
     time.sleep(0.2)
     conn.read_channel()
 
@@ -187,20 +209,124 @@ def run_probe(
             {"supported": [], "unsupported": []}
         )
 
-        for idx, entry in enumerate(commands, start=1):
+        cmd_index = 1
+        vlan_ids: List[int] = []
+
+        # -------------------------
+        # VLAN category handling
+        # -------------------------
+        if category == "vlans":
+            # 1) Run non-template VLAN commands first (before expansion)
+            for entry in commands:
+                template = entry["command"]
+                if "{{vlan_id}}" in template:
+                    continue
+
+                cmd = template
+                enforce_blocked_keywords(cmd, blocked)
+                result = execute_command(conn, cmd)
+
+                # Naming for summary vs others
+                if cmd.strip() == "show vlan":
+                    artifact_path = artifacts_dir / "vlan_summary.txt"
+                else:
+                    artifact_path = artifacts_dir / f"{category}_{cmd_index}.txt"
+
+                artifact_path.write_bytes(result["output"])
+                checksum = sha256_bytes(result["output"])
+
+                manifest["command_attempts"].append({
+                    "command": cmd,
+                    "category": category,
+                    "attempt_index": cmd_index,
+                    "status": result["status"],
+                    "duration_ms": result["duration_ms"],
+                    "error": result["error"],
+                    "artifact_path": str(artifact_path)
+                })
+
+                manifest["artifacts"].append({
+                    "path": str(artifact_path),
+                    "command": cmd,
+                    "category": category,
+                    "checksum": checksum
+                })
+
+                if result["status"] == "success":
+                    manifest["results"][category]["supported"].append(cmd)
+                    # extract only once
+                    if cmd.strip() == "show vlan" and not vlan_ids:
+                        vlan_ids = extract_vlan_ids(result["output"])
+                else:
+                    manifest["results"][category]["unsupported"].append(cmd)
+
+                cmd_index += 1
+
+            # 2) Template expansion — generate per-VLAN artifacts
+            if vlan_ids:
+                for entry in commands:
+                    template = entry["command"]
+                    if "{{vlan_id}}" not in template:
+                        continue
+
+                    for vid in vlan_ids:
+                        cmd = render_command(template, {"vlan_id": vid})
+                        enforce_blocked_keywords(cmd, blocked)
+                        result = execute_command(conn, cmd)
+
+                        if "detail" in cmd:
+                            artifact_path = artifacts_dir / f"vlan_{vid}_detail.txt"
+                        else:
+                            artifact_path = artifacts_dir / f"vlan_{vid}.txt"
+
+                        artifact_path.write_bytes(result["output"])
+                        checksum = sha256_bytes(result["output"])
+
+                        manifest["command_attempts"].append({
+                            "command": cmd,
+                            "category": category,
+                            "attempt_index": cmd_index,
+                            "status": result["status"],
+                            "duration_ms": result["duration_ms"],
+                            "error": result["error"],
+                            "artifact_path": str(artifact_path)
+                        })
+
+                        manifest["artifacts"].append({
+                            "path": str(artifact_path),
+                            "command": cmd,
+                            "category": category,
+                            "checksum": checksum
+                        })
+
+                        if result["status"] == "success":
+                            manifest["results"][category]["supported"].append(cmd)
+                        else:
+                            manifest["results"][category]["unsupported"].append(cmd)
+
+                        cmd_index += 1
+
+            # *** FIX: do not fall through to default handlers ***
+            continue
+
+
+        # -------------------------
+        # Default handling (non-VLAN)
+        # -------------------------
+        for entry in commands:
             cmd = entry["command"]
             enforce_blocked_keywords(cmd, blocked)
 
             result = execute_command(conn, cmd)
 
-            artifact_path = artifacts_dir / f"{category}_{idx}.txt"
+            artifact_path = artifacts_dir / f"{category}_{cmd_index}.txt"
             artifact_path.write_bytes(result["output"])
             checksum = sha256_bytes(result["output"])
 
             manifest["command_attempts"].append({
                 "command": cmd,
                 "category": category,
-                "attempt_index": idx,
+                "attempt_index": cmd_index,
                 "status": result["status"],
                 "duration_ms": result["duration_ms"],
                 "error": result["error"],
@@ -219,12 +345,14 @@ def run_probe(
             else:
                 manifest["results"][category]["unsupported"].append(cmd)
 
+            cmd_index += 1
+
     conn.disconnect()
 
     manifest_path = probe_dir / "probe_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    print("[OK] Probe complete (timing-safe)")
+    print("[OK] Probe complete — VLAN-expanded & cleaned")
     print(f"     Manifest: {manifest_path}")
 
 

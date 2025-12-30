@@ -7,6 +7,8 @@ platform:
 
 description: >
   ArubaOS-Switch (ProCurve-style) read-only command discovery set.
+  Extended to include VLAN membership, interface configs, mac table expansion,
+  and LLDP detail for complete port/neighbor/VLAN mapping.
 
 safety:
   read_only: true
@@ -32,19 +34,22 @@ commands:
     - command: show version
 
   lldp:
-    - command: show lldp info remote-device
     - command: show lldp info local-device
+    - command: show lldp info remote-device
+    - command: show lldp info remote-device detail
 
   interfaces:
     - command: show interfaces brief
     - command: show interfaces
+    - command: show trunks                   
 
   vlans:
     - command: show vlan
-    - command: show vlan brief
+    - command: show vlan {{vlan_id}}
 
   poe:
     - command: show power-over-ethernet
 
   mac_table:
     - command: show mac-address
+

@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
 """
-ArubaOS-Switch Collector
-=======================
+ArubaOS-Switch Collector (Quarterly Evidence)
+=============================================
+Aligned with command_probe TOOL_VERSION >= 0.5.0
 
-Evidence-based quarterly collector generated from frozen probe results.
-
-Source of truth:
-- Frozen command set: tools/command_probe/command_sets/aruba_os.yaml
-- Verified probe ID: 4bb33a02-e3db-4e19-8c79-f81979ace728
-- Software revision tested: WC.16.11.0007
-
-Guarantees:
-- Read-only
-- Timing-safe execution
-- Raw artifact preservation
-- Deterministic output
+Key behavior:
+- VLAN summary, per-VLAN, and per-VLAN detail captured
+- Prevents post-expansion duplicate VLAN commands
+- Safe, timing-based collection
+- All other behavior unchanged
 """
 
 import json
@@ -22,12 +16,14 @@ import yaml
 import uuid
 import hashlib
 import time
+import re
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from netmiko import ConnectHandler
 from jsonschema import Draft202012Validator
+from jinja2 import Template
 
 
 # -------------------------
@@ -40,7 +36,7 @@ SCHEMA_PATH = Path("schemas/command_set.schema.json")
 OUTPUT_ROOT = Path("artifacts/aruba_os_switch")
 
 COLLECTOR_NAME = "aruba_os_switch_collector"
-COLLECTOR_VERSION = "1.0.0"
+COLLECTOR_VERSION = "1.2.1"
 
 
 # -------------------------
@@ -79,6 +75,21 @@ def enforce_blocked_keywords(command: str, blocked: list[str]) -> None:
     for word in blocked:
         if word in lowered:
             raise ValueError(f"Blocked keyword '{word}' detected: {command}")
+
+
+def render_command(template_str: str, context: Dict[str, Any]) -> str:
+    return Template(template_str).render(**context)
+
+
+def extract_vlan_ids(output_bytes: bytes) -> List[int]:
+    text = output_bytes.decode(errors="ignore")
+    ids: List[int] = []
+    for match in re.finditer(r"^\s*(\d+)\s+", text, flags=re.MULTILINE):
+        try:
+            ids.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return ids
 
 
 # -------------------------
@@ -188,13 +199,100 @@ def run_collector(
             {"success": [], "failed": []}
         )
 
-        for idx, entry in enumerate(commands, start=1):
+        cmd_index = 1
+        vlan_ids: List[int] = []
+
+        # -------------------------
+        # VLAN category handling
+        # -------------------------
+        if category == "vlans":
+            # 1) non-template first
+            for entry in commands:
+                template = entry["command"]
+                if "{{vlan_id}}" in template:
+                    continue
+
+                cmd = template
+                enforce_blocked_keywords(cmd, blocked)
+                result = execute_command(conn, cmd)
+
+                # correct naming
+                if cmd.strip() == "show vlan":
+                    artifact_path = artifacts_dir / "vlan_summary.txt"
+                else:
+                    artifact_path = artifacts_dir / f"{category}_{cmd_index}.txt"
+
+                artifact_path.write_bytes(result["output"])
+                checksum = sha256_bytes(result["output"])
+
+                manifest["artifacts"].append({
+                    "category": category,
+                    "command": cmd,
+                    "path": str(artifact_path),
+                    "checksum": checksum,
+                    "status": result["status"],
+                    "duration_ms": result["duration_ms"]
+                })
+
+                if result["status"] == "success":
+                    manifest["results"][category]["success"].append(cmd)
+                    if cmd.strip() == "show vlan" and not vlan_ids:
+                        vlan_ids = extract_vlan_ids(result["output"])
+                else:
+                    manifest["results"][category]["failed"].append(cmd)
+
+                cmd_index += 1
+
+            # 2) template per VLAN only
+            if vlan_ids:
+                for entry in commands:
+                    template = entry["command"]
+                    if "{{vlan_id}}" not in template:
+                        continue
+
+                    for vid in vlan_ids:
+                        cmd = render_command(template, {"vlan_id": vid})
+                        enforce_blocked_keywords(cmd, blocked)
+                        result = execute_command(conn, cmd)
+
+                        if "detail" in cmd:
+                            artifact_path = artifacts_dir / f"vlan_{vid}_detail.txt"
+                        else:
+                            artifact_path = artifacts_dir / f"vlan_{vid}.txt"
+
+                        artifact_path.write_bytes(result["output"])
+                        checksum = sha256_bytes(result["output"])
+
+                        manifest["artifacts"].append({
+                            "category": category,
+                            "command": cmd,
+                            "path": str(artifact_path),
+                            "checksum": checksum,
+                            "status": result["status"],
+                            "duration_ms": result["duration_ms"]
+                        })
+
+                        if result["status"] == "success":
+                            manifest["results"][category]["success"].append(cmd)
+                        else:
+                            manifest["results"][category]["failed"].append(cmd)
+
+                        cmd_index += 1
+
+            # *** FULL FIX — no fallthrough ***
+            continue
+
+
+        # -------------------------
+        # Default handling (non-VLAN)
+        # -------------------------
+        for entry in commands:
             cmd = entry["command"]
             enforce_blocked_keywords(cmd, blocked)
 
             result = execute_command(conn, cmd)
 
-            artifact_path = artifacts_dir / f"{category}_{idx}.txt"
+            artifact_path = artifacts_dir / f"{category}_{cmd_index}.txt"
             artifact_path.write_bytes(result["output"])
             checksum = sha256_bytes(result["output"])
 
@@ -212,12 +310,14 @@ def run_collector(
             else:
                 manifest["results"][category]["failed"].append(cmd)
 
+            cmd_index += 1
+
     conn.disconnect()
 
     manifest_path = run_dir / "collector_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
-    print("[OK] ArubaOS-Switch collection complete")
+    print("[OK] ArubaOS-Switch collection complete (clean)")
     print(f"     Artifacts: {artifacts_dir}")
     print(f"     Manifest : {manifest_path}")
 
